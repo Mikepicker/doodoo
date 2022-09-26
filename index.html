@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="DooDoo.it - Your Pocket Todo List">
+
+    <title>DooDoo - Pocket To-Do List</title>
+
+    <script src="js/pocketbase.umd.js"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@latest/css/pico.min.css">
+    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
+  </head>
+  <body>
+    <div x-data="lists" class="container">
+      <nav>
+        <ul>
+          <li>
+            <h1 @click="selectedList = null" style="margin:0; text-align: center; cursor: pointer">DooDoo</h1>
+          </li>
+        </ul>
+        <ul>
+          <li><i x-show="!showLogin" @click="logout()" class="bx bx-log-out bx-md" style="cursor: pointer"></i></li>
+        </ul>
+      </nav>
+
+      <!-- login / signup -->
+      <article x-show="showLogin" x-transition>
+        <h2>Login</h2>
+
+        <label for="email">Email</label>
+        <input x-model="email" type="email" id="email" placeholder="Email address">
+
+        <label for="password">Password</label>
+        <input x-model="password" type="password" id="password">
+
+        <button @click="login()" class="contrast outline">Login</button>
+
+        <mark x-show="loginMessage" x-text="loginMessage"></mark>
+
+        <hr style="margin: 4rem;"></hr>
+
+        <h2>Signup</h2>
+
+        <label for="email">Email</label>
+        <input x-model="email" type="email" id="email" placeholder="Email address">
+
+        <label for="password">Password</label>
+        <input x-model="password" type="password" id="password">
+
+        <label for="passwordConfirm">Confirm Password</label>
+        <input x-model="passwordConfirm" type="password" id="passwordConfirm">
+
+        <button @click="signup()" class="contrast outline">Signup</button>
+
+        <mark x-show="signupMessage" x-text="signupMessage"></mark>
+
+      </article>
+
+      <!-- show lists -->
+      <article x-show="!showLogin && !selectedList" x-transition style="margin-top: 10%;">
+        <h2>Your Lists</h2>
+
+        <template x-for="list in lists">
+          <div style="display:flex; justify-content: space-between; margin-top: 1rem">
+            <u><strong x-text="list.name" @click="selectList(list)" style="cursor: pointer;"></strong></u>
+            <i @click="deleteList(list)" class="bx bx-trash bx-sm" style="text-align: end; cursor: pointer"></i>
+          </div>
+        </template>
+
+        <hr style="margin: 2rem"></hr>
+
+        <label for="newList">Create New List</label>
+        <input x-model="newListName" id="newList" type="newList" placeholder="List Name">
+        <button @click="createList" class="contrast outline">Create</button>
+
+      </article>
+
+      <!-- show selectedList items -->
+      <article x-show="!showLogin && selectedList" x-transition style="margin-top: 10%;">
+        <h2>Test</h2>
+
+        <template x-for="item in items">
+          <div style="display:flex; justify-content: space-between; margin-top: 1rem">
+            <label for="check">
+              <input x-model="item.done" @change="e => toggleDone(item, e.target.checked)" type="checkbox" id="check">
+              <strong x-text="item.text"></strong>
+            </label>
+            <i @click="deleteItem(item)" class="bx bx-trash bx-sm" style="text-align: end; cursor: pointer"></i>
+          </div>
+        </template>
+
+        <hr style="margin: 2rem"></hr>
+
+        <label for="newItem">Create New Item</label>
+        <input x-model="newItem" id="newItem" type="newItem" placeholder="What do you want to DooDoo?">
+        <button @click="createItem" class="contrast outline">Create</button>
+
+        <hr style="margin: 1rem;"></hr>
+
+        <button @click="selectedList = null" class="primary outline">Back</button>
+
+      </article>
+    </div>
+    <script>
+      document.addEventListener('alpine:init', () => {
+        Alpine.data('lists', () => ({
+          // pocketbase client
+          client: null,
+
+          // login / signup
+          showLogin: false,
+          email: null,
+          password: null,
+          passwordConfirm: null,
+          loginMessage: null,
+          signupMessage: null,
+
+          // lists data
+          lists: [],
+          newListName: '',
+          selectedList: null,
+
+          // items data
+          items: null,
+          newItem: null,
+
+          async init () {
+            // initialize pocketbase
+            this.client = new PocketBase('http://127.0.0.1:8090');
+
+            // capture invalid token
+            this.client.afterSend = function (response, data) {
+              if (response.status === 401) {
+                this.showLogin = true
+              }
+
+              return data
+            }
+
+            // if user is not logged in, show login / signup page
+            if (!window.localStorage.getItem('pocketbase_auth')) {
+              this.showLogin = true
+              return
+            }
+
+            // resume session
+            const auth = JSON.parse(window.localStorage.getItem('pocketbase_auth'))
+            this.client.authStore.save(auth.token, auth.model)
+
+            // fetch todo lists
+            this.getLists()
+
+            // suscribe to live update events
+            this.subscribeToLists()
+          },
+
+          // login
+          async login () {
+            try {
+              const user = await this.client.users.authViaEmail(this.email, this.password)
+              this.getLists()
+              this.subscribeToLists()
+              this.showLogin = false
+              this.email = ''
+              this.password = ''
+            } catch (err) {
+              this.loginMessage = err.data.message
+            }
+          },
+
+          // signup
+          async signup () {
+            try {
+              const user = await this.client.users.create({
+                email: this.email,
+                password: this.password,
+                passwordConfirm: this.passwordConfirm
+              })
+              this.email = ''
+              this.password = ''
+              this.passwordConfirm = ''
+              this.signupMessage = 'Success! Please, login.'
+            } catch (err) {
+              this.signupMessage = err.data.message
+              if (err.data.data.email) this.signupMessage += ` Email: ${err.data.data.email.message}`
+              if (err.data.data.password) this.signupMessage += ` Password: ${err.data.data.password.message}`
+              if (err.data.data.passwordConfirm) this.signupMessage += ` Password Confirm: ${err.data.data.passwordConfirm.message}`
+            }
+          },
+
+          // logout
+          async logout () {
+            this.client.authStore.clear()
+            this.showLogin = true
+          },
+
+          // lists functions
+          async subscribeToLists () {
+            this.client.realtime.subscribe('list', e => {
+              if (e.action === 'create') this.lists.push(e.record)
+              else if (e.action === 'delete') {
+                this.lists = this.lists.filter(l => l.id !== e.record.id)
+              }
+            })
+          },
+
+          async getLists () {
+            const { items } = await this.client.records.getList('list')
+            this.lists = items
+          },
+
+          async createList () {
+            try {
+              const record = await this.client.records.create('list', {
+                name: this.newListName,
+                userID: this.client.authStore.baseModel.id
+              })
+              this.newListName = ''
+            } catch (err) {
+              console.log('ERR', err)
+            }
+          },
+
+          async deleteList (list) {
+            try {
+              await this.client.records.delete('list', list.id)
+            } catch (err) {
+              console.log('ERR', err)
+            }
+          },
+
+          async selectList (list) {
+            try {
+              this.items = await this.client.records.getFullList('item', null, { filter: `list = '${list.id}'` })
+              this.selectedList = list
+
+              // suscribe to live update events
+              this.client.realtime.subscribe('item', e => {
+                if (e.record.list !== list.id) return
+                if (e.action === 'create') this.items.push(e.record)
+                if (e.action === 'update')
+                  this.items = this.items.map(i => i.id === e.record.id ? e.record : i)
+                else if (e.action === 'delete')
+                  this.items = this.items.filter(i => i.id !== e.record.id)
+              })
+            } catch (err) {
+              console.log('ERR', err)
+            }
+          },
+
+          // items functions
+          async createItem () {
+            try {
+              await this.client.records.create('item', { text: this.newItem, list: this.selectedList.id })
+              this.newItem = ''
+            } catch (err) {
+              console.log('ERR', err)
+            }
+          },
+
+          async deleteItem (item) {
+            try {
+              await this.client.records.delete('item', item.id)
+            } catch (err) {
+              console.log('ERR', err)
+            }
+          },
+
+          async toggleDone (item, toggle) {
+            try {
+              await this.client.records.update('item', item.id, { done: toggle })
+            } catch (err) {
+              console.log('ERR', err)
+            }
+          }
+        }))
+      })
+
+    </script>
+  </body>
+</html>
